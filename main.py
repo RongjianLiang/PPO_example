@@ -257,6 +257,58 @@ class PPO(LightningModule):
     def train_dataloader(self):
         return DataLoader(dataset=self.dataset, batch_size=self.hparams.batch_size)
 
+    def training_step(self, batch, batch_idx, optimizer_idx):
+        obs_b, loc_b, scale_b, action_b, reward_b, done_b, next_obs_b = batch
+
+        state_values = self.value_net(obs_b)
+
+        with torch.no_grad():
+            next_state_values = self.target_value_net(next_obs_b)
+            next_state_values[done_b.bool()] = 0.0 # zero out the next state when the episode is over
+            target = reward_b + self.hparams.gamma * next_state_values
+
+        if optimizer_idx == 0:  # optimizer for value network
+            loss = F.smooth_l1_loss(state_values, target)
+            self.log("episode/Value Loss: ", loss)
+            return loss
+
+        elif optimizer_idx == 1: # optimizer for policy
+            advantages = (target - state_values).detach()
+
+            new_loc, new_scale = self.policy(obs_b)     # recomputing the policy distribution
+            dist = Normal(new_loc, new_scale)
+            log_prob = dist.log_prob(action_b).sum(dim=-1, keepdim=True)
+
+            prev_dist = Normal(loc_b, scale_b) # dist before this epoch
+            prev_log_prob = prev_dist.log_prob(action_b).sum(dim=-1, keepdim=True)
+
+            # compute KL divergence?
+            rho = torch.exp(log_prob - prev_log_prob)
+
+            # compute the loss function
+            surrogate_1 = rho * advantages
+            surrogate_2 = rho.clip(1 - self.hparams.epsilon, 1 + self.hparams.epsilon) * advantages
+
+            policy_loss = - torch.minimum(surrogate_1, surrogate_2)
+            entropy = dist.entropy().sum(dim=-1, keepdim=True)
+            loss = policy_loss  - self.hparams.entropy_coef * entropy
+
+            self.log("episode/Policy Loss: ", policy_loss.mean())
+            self.log("episode/Entropy: ", entropy.mean())
+            self.log("episode/Reward: ", reward_b.mean())
+            return loss.mean()
+
+    def training_epoch_end(self, training_epoch_outputs):   # updating value network when epoch ends
+        self.target_value_net.load_state_dict(self.value_net.state_dict())
+
+        if self.current_epoch % 10 == 0:
+            average_return = test_agent(self.test_env, self.hparams.episode_length, self.policy, episodes=1)
+            self.log("average/Average Return: ", average_return)
+
+        if self.current_epoch % 50 == 0:
+            video = create_video(self.test_env, self.hparams.epsiode_length, policy=self.policy)
+            self.videos.append(video)
+
 
 def main():
     entry_point = functools.partial(envs.create_gym_env, env_name='ant')

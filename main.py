@@ -203,7 +203,7 @@ class RLDataset(IterableDataset):
             loc, scale = self.policy(self.obs)
             action = torch.normal(loc, scale)
             next_obs, reward, done, info = self.env.step(action)
-            transitions.append((self.obs, loc, scale, reward, done, next_obs))
+            transitions.append((self.obs, loc, scale, action, reward, done, next_obs))
             self.obs = next_obs
 
         num_samples = self.env.num_envs * self.samples_per_epoch
@@ -264,7 +264,7 @@ class PPO(LightningModule):
 
         with torch.no_grad():
             next_state_values = self.target_value_net(next_obs_b)
-            next_state_values[done_b.bool()] = 0.0 # zero out the next state when the episode is over
+            next_state_values[done_b.bool()] = 0.0  # zero out the next state when the episode is over
             target = reward_b + self.hparams.gamma * next_state_values
 
         if optimizer_idx == 0:  # optimizer for value network
@@ -306,7 +306,7 @@ class PPO(LightningModule):
             self.log("average/Average Return: ", average_return)
 
         if self.current_epoch % 50 == 0:
-            video = create_video(self.test_env, self.hparams.epsiode_length, policy=self.policy)
+            video = create_video(self.test_env, self.hparams.episode_length, policy=self.policy)
             self.videos.append(video)
 
 
@@ -329,6 +329,19 @@ def main():
     # print("Done: ", done)
     # print("\n\n======\n\n")
     # print("Info: ", info)
+
+    """
+    start tensorboard: please launch the tensorboard after training has ended. 
+    """
+
+    """
+    run the PPO algorithm! 
+    """
+    algo = PPO("brax-ant-v0")
+
+    trainer = Trainer(gpus=num_gpus, max_epochs=500)
+
+    trainer.fit(algo)
 
 
 if __name__ == "__main__":
